@@ -79,10 +79,13 @@ def checkout_branch(git, remote_exists, branch):
         git.checkout(branch)
         try:
             git.stash('pop')
-        except BaseException:
+        except BaseException as e:
+            print('Exception in checkout_branch')
+            print(e)
             git.checkout('--theirs', '.')
             git.reset()
     else:
+        print('Running git.checkout(HEAD, b=branch)')
         git.checkout('HEAD', b=branch)
 
 
@@ -182,21 +185,33 @@ event_name = os.environ['GITHUB_EVENT_NAME']
 event_data = get_github_event(os.environ['GITHUB_EVENT_PATH'])
 # Check if this event should be ignored
 skip_ignore_event = bool(os.environ.get('SKIP_IGNORE'))
+
+print('event_name = ', event_name)
+print('event_data = ', event_data)
+print('skip_ignore_event = ', skip_ignore_event)
+
 if skip_ignore_event or not ignore_event(event_name, event_data):
     # Set the repo to the working directory
+    print('working dir = ', os.getcwd())
     repo = Repo(os.getcwd())
 
     # Fetch/Set the branch name
     branch = os.getenv('PULL_REQUEST_BRANCH', 'create-pull-request/patch')
+    print('branch = ', branch)
 
     # Set the base branch
     github_ref = os.environ['GITHUB_REF']
+    print('github_ref = ', github_ref)
+
     if github_ref.startswith('refs/pull/'):
         base = os.environ['GITHUB_HEAD_REF']
+        print('base = ', base)
         # Reset to the merging branch instead of the merge commit
+        print('Running repo.git.checkout(base)')
         repo.git.checkout(base)
     else:
         base = github_ref[11:]
+        print('base = ', base)
 
     # Skip if the current branch is a PR branch created by this action
     if base.startswith(branch):
@@ -215,8 +230,11 @@ if skip_ignore_event or not ignore_event(event_name, event_data):
         # Suffix with the current timestamp
         branch = "%s-%s" % (branch, get_random_suffix())
 
+    print('branch = ', branch)
+
     # Check if the remote branch exists
     remote_exists = remote_branch_exists(repo, branch)
+    print('remote_exists = ', remote_exists)
 
     # If using short commit hash prefixes, check if a remote
     # branch already exists for this HEAD commit
@@ -231,8 +249,10 @@ if skip_ignore_event or not ignore_event(event_name, event_data):
     # Set commit author overrides
     author_email = os.getenv('COMMIT_AUTHOR_EMAIL', author_email)
     author_name = os.getenv('COMMIT_AUTHOR_NAME', author_name)
+
     # Set git configuration
     set_git_config(repo.git, author_email, author_name)
+
     # Checkout branch
     checkout_branch(repo.git, remote_exists, branch)
 
