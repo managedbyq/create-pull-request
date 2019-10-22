@@ -120,6 +120,14 @@ def process_event(event_name, event_data, repo, branch, base, remote_exists):
     pull_request_reviewers = os.environ.get('PULL_REQUEST_REVIEWERS')
     pull_request_team_reviewers = os.environ.get('PULL_REQUEST_TEAM_REVIEWERS')
 
+    if os.environ.get('PULL_REQUEST_REVIEWERS_FILE'):
+        with open(os.environ.get('PULL_REQUEST_REVIEWERS_FILE'), 'r') as f:
+            pull_request_reviewers = f.read().strip()
+
+    if os.environ.get('PULL_REQUEST_TEAM_REVIEWERS_FILE'):
+        with open(os.environ.get('PULL_REQUEST_TEAM_REVIEWERS_FILE'), 'r') as f:
+            pull_request_team_reviewers = f.read().strip()
+
     # Update URL for the 'origin' remote
     set_git_remote_url(repo.git, github_token, github_repository)
 
