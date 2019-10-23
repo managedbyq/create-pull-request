@@ -21,15 +21,6 @@ def get_github_event(github_event_path):
 
 def ignore_event(event_name, event_data):
     if event_name == "push":
-        # Ignore push events on deleted branches
-        # The event we want to ignore occurs when a PR is created but the repository owner decides
-        # not to commit the changes. They close the PR and delete the branch. This creates a
-        # "push" event that we want to ignore, otherwise it will create another branch and PR on
-        # the same commit.
-        deleted = "{deleted}".format(**event_data)
-        if deleted == "True":
-            print("Ignoring delete branch event.")
-            return True
         ref = "{ref}".format(**event_data)
         if not ref.startswith('refs/heads/'):
             print("Ignoring events for tags and remotes.")
@@ -139,7 +130,8 @@ def process_event(event_name, event_data, repo, branch, base, remote_exists):
     push_result = push_changes(repo.git, branch, commit_message)
     print(push_result)
 
-    # If the remote existed then a PR likely exists and we can finish here
+    # If the remote existed then we are using fixed branch strategy.
+    # A PR should already exist and we can finish here.
     if remote_exists:
         print("Updated pull request branch %s." % branch)
         sys.exit()
@@ -194,27 +186,38 @@ if skip_ignore_event or not ignore_event(event_name, event_data):
     # Set the repo to the working directory
     print('working dir = ', os.getcwd())
     repo = Repo(os.getcwd())
+    # Get the default for author email and name
+    author_email, author_name = get_author_default(event_name, event_data)
+    # Set commit author overrides
+    author_email = os.getenv('COMMIT_AUTHOR_EMAIL', author_email)
+    author_name = os.getenv('COMMIT_AUTHOR_NAME', author_name)
+    # Set git configuration
+    set_git_config(repo.git, author_email, author_name)
 
     # Fetch/Set the branch name
-    branch = os.getenv('PULL_REQUEST_BRANCH', 'create-pull-request/patch')
-    print('branch = ', branch)
+    branch_prefix = os.getenv(
+        'PULL_REQUEST_BRANCH',
+        'create-pull-request/patch')
+    # Fetch the git ref
+    github_ref = os.environ['GITHUB_REF']
+    # Fetch an optional base branch override
+    base_override = os.environ.get('PULL_REQUEST_BASE')
 
     # Set the base branch
-    github_ref = os.environ['GITHUB_REF']
-    print('github_ref = ', github_ref)
-
-    if github_ref.startswith('refs/pull/'):
+    if base_override is not None:
+        base = base_override
+        checkout_branch(repo.git, True, base)
+    elif github_ref.startswith('refs/pull/'):
+        # Switch to the merging branch instead of the merge commit
         base = os.environ['GITHUB_HEAD_REF']
-        print('base = ', base)
-        # Reset to the merging branch instead of the merge commit
-        print('Running repo.git.checkout(base)')
         repo.git.checkout(base)
     else:
         base = github_ref[11:]
         print('base = ', base)
 
-    # Skip if the current branch is a PR branch created by this action
-    if base.startswith(branch):
+    # Skip if the current branch is a PR branch created by this action.
+    # This may occur when using a PAT instead of GITHUB_TOKEN.
+    if base.startswith(branch_prefix):
         print("Branch '%s' was created by this action. Skipping." % base)
         sys.exit()
 
@@ -222,13 +225,21 @@ if skip_ignore_event or not ignore_event(event_name, event_data):
     branch_suffix = os.getenv('BRANCH_SUFFIX', 'short-commit-hash')
     if branch_suffix == "short-commit-hash":
         # Suffix with the short SHA1 hash
-        branch = "%s-%s" % (branch, get_head_short_sha1(repo))
+        branch = "%s-%s" % (branch_prefix, get_head_short_sha1(repo))
     elif branch_suffix == "timestamp":
         # Suffix with the current timestamp
-        branch = "%s-%s" % (branch, int(time.time()))
+        branch = "%s-%s" % (branch_prefix, int(time.time()))
     elif branch_suffix == "random":
         # Suffix with the current timestamp
-        branch = "%s-%s" % (branch, get_random_suffix())
+        branch = "%s-%s" % (branch_prefix, get_random_suffix())
+    elif branch_suffix == "none":
+        # Fixed branch name
+        branch = branch_prefix
+    else:
+        print(
+            "Branch suffix '%s' is not a valid value." %
+            branch_suffix)
+        sys.exit(1)
 
     print('branch = ', branch)
 
@@ -236,22 +247,19 @@ if skip_ignore_event or not ignore_event(event_name, event_data):
     remote_exists = remote_branch_exists(repo, branch)
     print('remote_exists = ', remote_exists)
 
-    # If using short commit hash prefixes, check if a remote
-    # branch already exists for this HEAD commit
-    if branch_suffix == 'short-commit-hash' and remote_exists:
-        print(
-            "Pull request branch '%s' already exists for this commit. Skipping." %
-            branch)
-        sys.exit()
-
-    # Get the default for author email and name
-    author_email, author_name = get_author_default(event_name, event_data)
-    # Set commit author overrides
-    author_email = os.getenv('COMMIT_AUTHOR_EMAIL', author_email)
-    author_name = os.getenv('COMMIT_AUTHOR_NAME', author_name)
-
-    # Set git configuration
-    set_git_config(repo.git, author_email, author_name)
+    if remote_exists:
+        if branch_suffix == 'short-commit-hash':
+            # A remote branch already exists for the HEAD commit
+            print(
+                "Pull request branch '%s' already exists for this commit. Skipping." %
+                branch)
+            sys.exit()
+        elif branch_suffix in ['timestamp', 'random']:
+            # Generated branch name clash with an existing branch
+            print(
+                "Pull request branch '%s' already exists. Please re-run." %
+                branch)
+            sys.exit(1)
 
     # Checkout branch
     checkout_branch(repo.git, remote_exists, branch)
